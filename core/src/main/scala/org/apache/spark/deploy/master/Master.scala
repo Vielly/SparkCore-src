@@ -278,6 +278,7 @@ private[deploy] class Master(
         schedule()
       }
 
+      //
     case ExecutorStateChanged(appId, execId, state, message, exitStatus) =>
       //通过executor获取application，反过来再用application获取executor
       val execOption = idToApp.get(appId).flatMap(app => app.executors.get(execId))

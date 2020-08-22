@@ -169,6 +169,7 @@ private[spark] class TaskSchedulerImpl(
   def initialize(backend: SchedulerBackend) {
     this.backend = backend
     schedulableBuilder = {
+      // 根据调度策略（模式），返回相应的的SchedulableBuilder
       schedulingMode match {
         case SchedulingMode.FIFO =>
           new FIFOSchedulableBuilder(rootPool)
@@ -179,16 +180,26 @@ private[spark] class TaskSchedulerImpl(
           s"$schedulingMode")
       }
     }
+    // 创建调度池（我们习惯叫它SchedulerPool）
     schedulableBuilder.buildPools()
   }
 
   def newTaskId(): Long = nextTaskId.getAndIncrement()
 
   override def start() {
+    // TaskSchedulerImpl的start()方法底层实际调用了SchedulerBackend的start()方法
     backend.start()
 
+    /**
+     * 在spark作业运行中，一个spark作业会构成一个DAG调度图，一个DAG又切分成多个stage，一个stage由多个Tesk组成，一个stage里面的不同task的执行时间可能不一样，
+     * 有的task很快就执行完成了，而有的可能执行很长一段时间也没有完成。造成这种情况的原因可能是集群内机器的配置性能不同、网络波动、或者是由于数据倾斜引起的。而推测
+     * 执行(speculative)就是当出现同一个stage里面有task长时间完成不了任务，spark就会在不同的executor上再启动一个task来跑这个任务，然后看哪个task先完成，就
+     * 取该task的结果，并kill掉另一个task。其实对于集群内有不同性能的机器开启这个功能是比较有用的。
+     */
+    // 如果spark-env中没有设置speculation（获取不到），则默认为false，本地模式设置此项没有效果，因为只在本地一台机器上运行
     if (!isLocal && conf.getBoolean("spark.speculation", false)) {
       logInfo("Starting speculative execution thread")
+      // 在别的executor新起一个线程跑同一个stage中运行时间长的task
       speculationScheduler.scheduleWithFixedDelay(new Runnable {
         override def run(): Unit = Utils.tryOrStopSparkContext(sc) {
           checkSpeculatableTasks()

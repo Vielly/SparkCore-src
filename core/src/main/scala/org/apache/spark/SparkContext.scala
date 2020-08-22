@@ -490,14 +490,21 @@ class SparkContext(config: SparkConf) extends Logging {
       HeartbeatReceiver.ENDPOINT_NAME, new HeartbeatReceiver(this))
 
     // Create and start the scheduler
+    // createTaskScheduler首先会创建TaskSchedulerImpl（这个才是真正的TaskScheduler），其中参数
+    // 1、master是在写Spark程序时的setMaster()方法中指定的参数
+    // 2、deployMode是在我们提交spark程序（jar包）的时候，spark-submit指定的 --master参数，也就是部署方式，standalone、cluster或者client
+    // 补充说明：如果使用yarn，需要在spark-env中配置Hadoop的配置文件目录
     val (sched, ts) = SparkContext.createTaskScheduler(this, master, deployMode)
     _schedulerBackend = sched
-    _taskScheduler = ts
+    _taskScheduler = ts // 其实这里是TaskSchedulerImpl，所以说TaskSchedulerImpl才是真正的TaskScheduler
+    //SchedulerBackend和TaskScheduler创建完成之后，才创建DAGScheduler
     _dagScheduler = new DAGScheduler(this)
+    // 心跳机制，heartbeatReceiver使用的是RPC
     _heartbeatReceiver.ask[Boolean](TaskSchedulerIsSet)
 
     // start TaskScheduler after taskScheduler sets DAGScheduler reference in DAGScheduler's
     // constructor
+    // 启动TaskScheduler（TaskSchedulerImpl），其实start()中还调用了SchedulerBackend的start()
     _taskScheduler.start()
 
     _applicationId = _taskScheduler.applicationId()
@@ -2720,9 +2727,14 @@ object SparkContext extends Logging {
     import SparkMasterRegex._
 
     // When running locally, don't try to re-execute tasks on failure.
+    // 最大的Task失败数，当失败数少于此数时，不会尝试重新运行
     val MAX_LOCAL_TASK_FAILURES = 1
 
     master match {
+        // 根据master的值决定创建什么样的SchedulerBackend,在创建SchedulerBackend之前，会先创建TaskSchedulerImpl
+        // 然后将TaskSchedulerImpl以参数的形式传入SchedulerBackend构造器
+        // TaskSchedulerImpl调用initialize，创建SchedulerPool（schedulableBuilder.buildPools()），他有不同的调度策略，FIFO或FAIR
+        // 最后以元组的形式返回SchedulerBackend和TaskSchedulerImpl
       case "local" =>
         val scheduler = new TaskSchedulerImpl(sc, MAX_LOCAL_TASK_FAILURES, isLocal = true)
         val backend = new LocalSchedulerBackend(sc.getConf, scheduler, 1)
@@ -2751,6 +2763,7 @@ object SparkContext extends Logging {
         scheduler.initialize(backend)
         (backend, scheduler)
 
+        // Standalone模式
       case SPARK_REGEX(sparkUrl) =>
         val scheduler = new TaskSchedulerImpl(sc)
         val masterUrls = sparkUrl.split(",").map("spark://" + _)
