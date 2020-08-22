@@ -28,6 +28,12 @@ import org.apache.spark.shuffle.ShuffleHandle
  * :: DeveloperApi ::
  * Base class for dependencies.
  */
+/*
+ * RDD有四种依赖，分别是ShuffleDependency，OneToOneDependency，RangeDependency和PrunDependency，
+ * 其中PrunDependency在org.apache.spark.rdd的PartitionPruningRDD类文件中，OneToOneDependency、
+ * RangeDependency和PrunDependency都是抽象类NarrowDependency的子类。
+ * ShuffleDependency和NarrowDependency是Dependency的一级子类，NarrowDependency是抽象类
+ */
 @DeveloperApi
 abstract class Dependency[T] extends Serializable {
   def rdd: RDD[T]
@@ -46,6 +52,7 @@ abstract class NarrowDependency[T](_rdd: RDD[T]) extends Dependency[T] {
    * @param partitionId a partition of the child RDD
    * @return the partitions of the parent RDD that the child partition depends upon
    */
+  // 其输入参数是子RDD的分区（partition）id，返回的是子RDD分区所依赖的父RDD分区id序列
   def getParents(partitionId: Int): Seq[Int]
 
   override def rdd: RDD[T] = _rdd
@@ -103,6 +110,7 @@ class ShuffleDependency[K: ClassTag, V: ClassTag, C: ClassTag](
  */
 @DeveloperApi
 class OneToOneDependency[T](rdd: RDD[T]) extends NarrowDependency[T](rdd) {
+  // 子RDD的分区id与父RDD分区的id一样，相当于父RDD的分区复制到子RDD的对应分区中，分区是一一对应关系，RDD的关系也是一一对应关系
   override def getParents(partitionId: Int): List[Int] = List(partitionId)
 }
 
@@ -115,10 +123,21 @@ class OneToOneDependency[T](rdd: RDD[T]) extends NarrowDependency[T](rdd) {
  * @param outStart the start of the range in the child RDD
  * @param length the length of the range
  */
+/*
+ * 三个变量，inStart：父RDD的range起始位置，outStart：子RDD的range起始位置，length：range的长度
+ */
 @DeveloperApi
 class RangeDependency[T](rdd: RDD[T], inStart: Int, outStart: Int, length: Int)
   extends NarrowDependency[T](rdd) {
 
+  /*
+   * 获取父RDD分区id的规则：如果子RDD分区id在子RDD的range起始位置（outStart）到range结束位置（outStart + length）
+   * 之间则返回父RDD分区id为：子分区id - 子RDD的range起始位置 + 父RDD的range起始位置。其中（- 子RDD的range起始位置 + 父RDD的range起始位置）
+   * 是子RDD分区的 range 起始位置和 父RDD分区的 range 的起始位置的相对距离。子分区id加上这个相对距离就是父分区的id，否则否则是无依赖的父RDD分区。
+   * 父子RDD的分区关系是一一对应关系，RDD的关系有可能是一对一（length是1，就是特殊的OneToOneDependency），也可能是多对一，也可能是一对多。
+   * @param partitionId 子RDD的分区id
+   * @return 子RDD所依赖的父RDD分区id列表
+   */
   override def getParents(partitionId: Int): List[Int] = {
     if (partitionId >= outStart && partitionId < outStart + length) {
       List(partitionId - outStart + inStart)
