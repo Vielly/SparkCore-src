@@ -46,6 +46,17 @@ import org.apache.spark.storage._
 import org.apache.spark.storage.BlockManagerMessages.BlockManagerHeartbeat
 import org.apache.spark.util._
 
+/*
+ * 实现了面向Stage调度机制的高层次调度层。它会为每个job计算出Stage的DAG，追踪RDD和Stage的输出是否被物化，
+ * 并且寻找一个消耗最小的调度机制来运行job。
+ * 它会将Stage以TaskSet的形式提交到底层的TaskSchedulerImpl上，来在集群上运行它们(task)。
+ *
+ * 除了处理Stage的DAG，它还负责决定每一个task的最佳位置，基于当前的缓存状态，将这些最佳位置信息提交给底层的TaskSchedulerImpl。
+ * 此外，它还会处理由于Shuffle输出文件丢失导致的失败，在这种情况下，旧的Stage可能会被重新提交。
+ * 一个Stage内部的失败，如果不是由于Shuffle文件丢失所导致的，会被TaskScheduler处理，它会多次重试每个task，直到最后，实在不行了，
+ * 才会去取消整个Stage。
+ */
+
 /**
  * The high-level scheduling layer that implements stage-oriented scheduling. It computes a DAG of
  * stages for each job, keeps track of which RDDs and stage outputs are materialized, and finds a
