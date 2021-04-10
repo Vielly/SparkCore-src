@@ -557,15 +557,27 @@ private[deploy] class Master(
     if (state != RecoveryState.RECOVERING) { return }
     state = RecoveryState.COMPLETING_RECOVERY
 
+    /*
+     * 将worker和application还是UNKNOWN状态的过滤出来
+     * 然后遍历,最后调用removeWorker和finishApplication方法，
+     * 因为Master挂掉，将Standby Master切换为Active之前，worker和
+     * application可能已经出故障或者甚至挂掉，所以需对他们进行清理。
+     * 清理机制：
+     *         1、从内存缓存中移除
+     *         2、从相关的组件中移除
+     *         3、从持久化引擎中移除
+     */
     // Kill off any workers and apps that didn't respond to us.
     workers.filter(_.state == WorkerState.UNKNOWN).foreach(
       removeWorker(_, "Not responding for recovery"))
     apps.filter(_.state == ApplicationState.UNKNOWN).foreach(finishApplication)
 
     // Update the state of recovered apps to RUNNING
+    //将WAITING状态的application设置为RUNNING
     apps.filter(_.state == ApplicationState.WAITING).foreach(_.state = ApplicationState.RUNNING)
 
     // Reschedule drivers which were not claimed by any workers
+    //如果driver没有启动，则重新启动，如果推测器没有启动，报错
     drivers.filter(_.worker.isEmpty).foreach { d =>
       logWarning(s"Driver ${d.id} was not found after master recovery")
       if (d.desc.supervise) {
@@ -577,6 +589,7 @@ private[deploy] class Master(
       }
     }
 
+    //更改Master状态为ALIVE（Active），主备切换完成
     state = RecoveryState.ALIVE
     schedule()
     logInfo("Recovery complete - resuming operations!")
@@ -794,30 +807,38 @@ private[deploy] class Master(
 
   private def removeWorker(worker: WorkerInfo, msg: String) {
     logInfo("Removing worker " + worker.id + " on " + worker.host + ":" + worker.port)
+
+     //将worker的状态设置为DEAD，然后从内存缓存中移除
     worker.setState(WorkerState.DEAD)
     idToWorker -= worker.id
     addressToWorker -= worker.endpoint.address
 
     for (exec <- worker.executors.values) {
       logInfo("Telling app of lost executor: " + exec.id)
+      //executor负责的application向所属的driver发送executor和worker已经死了
       exec.application.driver.send(ExecutorUpdated(
         exec.id, ExecutorState.LOST, Some("worker lost"), None, workerLost = true))
+      //将executor的状态设置为LOST，防止继续执行任务
       exec.state = ExecutorState.LOST
+      //最后一处executor
       exec.application.removeExecutor(exec)
     }
     for (driver <- worker.drivers.values) {
-      if (driver.desc.supervise) {
+      if (driver.desc.supervise) { //推测器，判断worker所属driver是否已经挂掉，如果已经挂掉，那么重启
         logInfo(s"Re-launching ${driver.id}")
         relaunchDriver(driver)
-      } else {
+      } else {//如果没有开启推测器，那么就认为worker所属driver已经挂掉，将driver状态设置为ERROR
         logInfo(s"Not re-launching ${driver.id} because it was not supervised")
         removeDriver(driver.id, DriverState.ERROR, None)
       }
     }
     logInfo(s"Telling app of lost worker: " + worker.id)
+    //过滤掉在这个worker上执行的application相关任务
     apps.filterNot(completedApps.contains(_)).foreach { app =>
+      //让application所属driver移除掉这个worker
       app.driver.send(WorkerRemoved(worker.id, worker.host, msg))
     }
+    //持久化引擎去除这个worker
     persistenceEngine.removeWorker(worker)
   }
 
@@ -829,12 +850,17 @@ private[deploy] class Master(
     // can not distinguish the statusUpdate of the original driver and the newly relaunched one,
     // for example, when DriverStateChanged(driverID1, KILLED) arrives at master, master will
     // remove driverID1, so the newly relaunched driver disappears too. See SPARK-19900 for details.
+
+    //移除掉当前driver，包括内存缓冲、持久化引擎和所在worker上进行移除，并将状态设置为RELAUNCHING
     removeDriver(driver.id, DriverState.RELAUNCHING, None)
+    //用修改后的这个driver的信息重新建个driver
     val newDriver = createDriver(driver.desc)
+    //放入持久化引擎进行持久化
     persistenceEngine.addDriver(newDriver)
     drivers.add(newDriver)
+    //加入等待队列
     waitingDrivers += newDriver
-
+    //Master找机会重新找个worker启动driver（调度）
     schedule()
   }
 
@@ -1035,13 +1061,14 @@ private[deploy] class Master(
         //找得到
       case Some(driver) =>
         logInfo(s"Removing driver: $driverId")
+        //从内存缓存中移除掉当前driver
         drivers -= driver
         if (completedDrivers.size >= RETAINED_DRIVERS) {
           val toRemove = math.max(RETAINED_DRIVERS / 10, 1)
           completedDrivers.trimStart(toRemove)
         }
         completedDrivers += driver
-        //持久化删除Driver
+        //持久化引擎删除Driver
         persistenceEngine.removeDriver(driver)
         driver.state = finalState
         driver.exception = exception
