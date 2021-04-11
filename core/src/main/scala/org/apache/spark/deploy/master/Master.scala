@@ -244,21 +244,37 @@ private[deploy] class Master(
       id, workerHost, workerPort, workerRef, cores, memory, workerWebUiUrl, masterAddress) =>
       logInfo("Registering worker %s:%d with %d cores, %s RAM".format(
         workerHost, workerPort, cores, Utils.megabytesToString(memory)))
+      //如果Master处于STANDBY状态，则给worker响应，自己正处于STANDBY状态
       if (state == RecoveryState.STANDBY) {
         workerRef.send(MasterInStandby)
       } else if (idToWorker.contains(id)) {
+        //通过worker的id判断内存缓存中是否已经存在当前的worker
+        //如果是，则给worker发送注册失败的信息（重复注册）
         workerRef.send(RegisterWorkerFailed("Duplicate worker ID"))
       } else {
+        //创建WorkerInfo
         val worker = new WorkerInfo(id, workerHost, workerPort, cores, memory,
           workerRef, workerWebUiUrl)
+
+        /*
+         * 注册worker。首先将内存缓存中与当前worker的host和port一样，且状态为DEAD的worker进行移除，
+         * 再判断缓存中地址与worker的映射是否已存在，如果已存在，
+         * 则判断是否状态为UNKNOWN：
+         * 是则将其状态设置为DEAD，最后将其从内存缓存、持久化引擎中移除，重新将当前worker加入到内存缓存中，返回true
+         * 否则，提示重复注册，并返回false
+         */
         if (registerWorker(worker)) {
+          //使用持久化引擎持久化worker信息
           persistenceEngine.addWorker(worker)
+          //向worker发送注册成功信息，包括Master的相关信息、地址等
           workerRef.send(RegisteredWorker(self, masterWebUiUrl, masterAddress))
           schedule()
-        } else {
+        } else {//重复注册（已经存在）
           val workerAddress = worker.endpoint.address
+          //提示重复注册
           logWarning("Worker registration failed. Attempted to re-register worker at same " +
             "address: " + workerAddress)
+          //向worker响应注册失败信息
           workerRef.send(RegisterWorkerFailed("Attempted to re-register worker at same address: "
             + workerAddress))
         }
@@ -785,6 +801,7 @@ private[deploy] class Master(
   private def registerWorker(worker: WorkerInfo): Boolean = {
     // There may be one or more refs to dead workers on this same node (w/ different ID's),
     // remove them.
+    //过滤出与当前worker的host和port一样，并且状态为DEAD的worker，最后将他们从内存缓存中去掉
     workers.filter { w =>
       (w.host == worker.host && w.port == worker.port) && (w.state == WorkerState.DEAD)
     }.foreach { w =>
@@ -792,6 +809,8 @@ private[deploy] class Master(
     }
 
     val workerAddress = worker.endpoint.address
+    //地址与worker的映射关系如果已经存在当前worker,则对已存在的worker的状态进行判断，如果是UNKNOWN，则进行清除
+    //如果是其他状态（DEAD已经在上面从内存中移除），则给出提示重新注册，并返回false
     if (addressToWorker.contains(workerAddress)) {
       val oldWorker = addressToWorker(workerAddress)
       if (oldWorker.state == WorkerState.UNKNOWN) {
@@ -803,7 +822,7 @@ private[deploy] class Master(
         return false
       }
     }
-
+    //加入内存缓存
     workers += worker
     idToWorker(worker.id) = worker
     addressToWorker(workerAddress) = worker
