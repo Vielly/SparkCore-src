@@ -266,14 +266,19 @@ private[deploy] class Master(
 
     case RegisterApplication(description, driver) =>
       // TODO Prevent repeated registrations from some driver
+      //如果Master的状态为STANDBY，则不做任何响应
       if (state == RecoveryState.STANDBY) {
         // ignore, don't send response
       } else {
         logInfo("Registering app " + description.name)
+        //通过ApplicationDescription创建ApplicationInfo
         val app = createApplication(description, driver)
+        //注册Application，其实就是将Application加入到内存缓存、driver和等待调度队列中
         registerApplication(app)
         logInfo("Registered app " + description.name + " with ID " + app.id)
+        //使用持久化引擎对Application进行持久化
         persistenceEngine.addApplication(app)
+        //给AppClient响应，即给负责此Application的driver响应，包括ApplicationId和Master的一些相关信息
         driver.send(RegisteredApplication(app.id, self))
         schedule()
       }
@@ -868,22 +873,29 @@ private[deploy] class Master(
       ApplicationInfo = {
     val now = System.currentTimeMillis()
     val date = new Date(now)
+    //使用时间戳创建Application的唯一id
     val appId = newApplicationId(date)
     new ApplicationInfo(now, appId, desc, date, driver, defaultCores)
   }
 
   private def registerApplication(app: ApplicationInfo): Unit = {
     val appAddress = app.driver.address
+    //如果现有的driver已经负责此Application，则会提示重复注册，并返回不做任何处理
     if (addressToApp.contains(appAddress)) {
       logInfo("Attempted to re-register application at same address: " + appAddress)
       return
     }
 
+    //否则
+    //计算Application所需的资源信息
     applicationMetricsSystem.registerSource(app.appSource)
+    //将Application加入到内存缓存
     apps += app
     idToApp(app.id) = app
     endpointToApp(app.driver) = app
+    //将Application加入到driver中
     addressToApp(appAddress) = app
+    //将Application加入到等待调度队列中
     waitingApps += app
   }
 
