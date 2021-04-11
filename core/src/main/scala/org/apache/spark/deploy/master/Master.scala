@@ -308,31 +308,45 @@ private[deploy] class Master(
         case Some(exec) =>
           //通过appid获取app的信息
           val appInfo = idToApp(appId)
+          //改变executor状态
           val oldState = exec.state
           exec.state = state
 
+          //如果改变的状态为RUNNING，且改变之前的状态为LAUNCHING，则提示非法改变状态，并重置Application的重试次数
           if (state == ExecutorState.RUNNING) {
             assert(oldState == ExecutorState.LAUNCHING,
               s"executor $execId state transfer from $oldState to RUNNING is illegal")
+            //将Application的重试次数重置为0
             appInfo.resetRetryCount()
           }
 
+          //给Driver发送Executor状态改变信息
           exec.application.driver.send(ExecutorUpdated(execId, state, message, exitStatus, false))
 
+          //判断Executor状态是否是KILLED, FAILED, LOST, EXITED
           if (ExecutorState.isFinished(state)) {
             // Remove this executor from the worker and app
+
+            //给出提示，移除Executor
             logInfo(s"Removing executor ${exec.fullId} because it is $state")
             // If an application has already finished, preserve its
             // state to display its information properly on the UI
+
+            //判断Application是否是WAITING，RUNNING
             if (!appInfo.isFinished) {
+              //如果是，则移除Executor
               appInfo.removeExecutor(exec)
             }
+            //worker移除Executor
             exec.worker.removeExecutor(exec)
 
             val normalExit = exitStatus == Some(0)
             // Only retry certain number of times so we don't go into an infinite loop.
             // Important note: this code path is not exercised by tests, so be very careful when
             // changing this `if` condition.
+
+            //如果Application尝试次数再0到10之间，且给Application分配的Executor的状态都是非RUNNING，则重置Application重试次数，
+            // 并从内存缓存、相关组件和持久化引擎中移除，并设置Application的状态设置为FAILED
             if (!normalExit
                 && appInfo.incrementRetryCount() >= MAX_EXECUTOR_RETRIES
                 && MAX_EXECUTOR_RETRIES >= 0) { // < 0 disables this application-killing path
