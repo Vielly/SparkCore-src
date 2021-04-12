@@ -729,6 +729,8 @@ private[deploy] class Master(
           // many workers as possible. If we are not spreading out, then we should keep
           // scheduling executors on this worker until we use all of its resources.
           // Otherwise, just move on to the next worker.
+
+          //spreadOutApps适用于控制，尽可能让executor分散到多个worker上
           if (spreadOutApps) {
             keepScheduling = false
           }
@@ -842,7 +844,7 @@ private[deploy] class Master(
           //启动成功，即找到合适启动当前的driver了
           launched = true
         }
-        //其实就是1到 numWorkersAlive-1，即指向先一个worker
+        //其实就是1到 numWorkersAlive-1，即指向下一个worker
         curPos = (curPos + 1) % numWorkersAlive
       }
     }
