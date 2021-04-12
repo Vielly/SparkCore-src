@@ -811,7 +811,7 @@ private[deploy] class Master(
       return
     }
     // Drivers take strict precedence over executors
-    //去除所有为ALIVE状态的worker，并对他们的位置进行打乱
+    //取出所有为ALIVE状态的worker，并对他们的位置进行打乱
     val shuffledAliveWorkers = Random.shuffle(workers.toSeq.filter(_.state == WorkerState.ALIVE))
     val numWorkersAlive = shuffledAliveWorkers.size
     var curPos = 0
