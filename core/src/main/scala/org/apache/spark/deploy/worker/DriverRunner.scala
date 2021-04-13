@@ -92,7 +92,7 @@ private[deploy] class DriverRunner(
           // prepare driver jars and run driver
           // 启动Driver的准备工作，
           // 包括将用户上传的jar下载到Driver的工作目录、将Driver的启动命令
-          // 封装成ProcessBiulder、标准输出重定向到文件、超时重试、启动Driver等
+          // 封装成ProcessBuilder、标准输出重定向到文件、超时重试、启动Driver等
           val exitCode = prepareAndRunDriver()
 
           // set final state depending on if forcibly killed and process exit code
@@ -186,7 +186,7 @@ private[deploy] class DriverRunner(
     }
 
     // TODO: If we add ability to submit multiple jars they should also be added here
-    //将Driver的启动命令封装成ProcessBiulder
+    //将Driver的启动命令封装成ProcessBuilder
     val builder = CommandUtils.buildProcessBuilder(driverDesc.command, securityManager,
       driverDesc.mem, sparkHome.getAbsolutePath, substituteVariables)
 

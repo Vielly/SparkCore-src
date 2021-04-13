@@ -507,6 +507,8 @@ private[deploy] class Worker(
           // Create local dirs for the executor. These are passed to the executor via the
           // SPARK_EXECUTOR_DIRS environment variable, and deleted by the Worker when the
           // application finishes.
+
+          //创建Executor的工作目录
           val appLocalDirs = appDirectories.getOrElse(appId, {
             val localRootDirs = Utils.getOrCreateLocalRootDirs(conf)
             val dirs = localRootDirs.flatMap { dir =>
@@ -526,7 +528,9 @@ private[deploy] class Worker(
             }
             dirs
           })
+          //Application与工作目录的映射关系
           appDirectories(appId) = appLocalDirs
+          //创建ExecutorRunner用于启动和管理Executor
           val manager = new ExecutorRunner(
             appId,
             execId,
@@ -543,7 +547,16 @@ private[deploy] class Worker(
             workerUri,
             conf,
             appLocalDirs, ExecutorState.RUNNING)
+          // appId/execId与ExecutorRunner的映射关系
           executors(appId + "/" + execId) = manager
+          //启动ExecutorRunner
+          /*
+           * 创建一个Java线程，用于启动Driver进程，这个线程的工作内容：
+           *  1、将命令封装成ProcessBuilder
+           *  2、通过ProcessBuilder配置命令的参数
+           *  3、标准输出重定向到文件
+           *  4、启动Executor
+           */
           manager.start()
           coresUsed += cores_
           memoryUsed += memory_
@@ -596,7 +609,7 @@ private[deploy] class Worker(
       /*
        * 首先创建一个线程，用于启动Driver进程，这个线程的工作内容，
        *  1、将用户上传的jar包下载到Driver的工作目录
-       *  2、将Driver的启动命令封装成ProcessBiulder
+       *  2、将Driver的启动命令封装成ProcessBuilder
        *  3、重定向标准输出到文件
        *  4、超时重试
        *  5、启动Driver
