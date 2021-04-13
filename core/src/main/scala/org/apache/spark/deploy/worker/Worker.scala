@@ -579,16 +579,28 @@ private[deploy] class Worker(
 
     case LaunchDriver(driverId, driverDesc) =>
       logInfo(s"Asked to launch driver $driverId")
+      //启动DriverRunner线程，并在本地创建Driver的工作目录、通过命令启动Driver、管理Driver
       val driver = new DriverRunner(
         conf,
         driverId,
+        //worker的本地目录
         workDir,
         sparkHome,
+        //启动Driver的命令
         driverDesc.copy(command = Worker.maybeUpdateSSLSettings(driverDesc.command, conf)),
         self,
         workerUri,
         securityMgr)
       drivers(driverId) = driver
+      //启动Driver。
+      /*
+       * 首先创建一个线程，用于启动Driver进程，这个线程的工作内容，
+       *  1、将用户上传的jar包下载到Driver的工作目录
+       *  2、将Driver的启动命令封装成ProcessBiulder
+       *  3、重定向标准输出到文件
+       *  4、超时重试
+       *  5、启动Driver
+       */
       driver.start()
 
       coresUsed += driverDesc.cores

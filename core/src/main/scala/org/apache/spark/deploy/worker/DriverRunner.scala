@@ -79,6 +79,7 @@ private[deploy] class DriverRunner(
 
   /** Starts a thread to run and manage the driver. */
   private[worker] def start() = {
+    //创建一个Java的线程
     new Thread("DriverRunner for " + driverId) {
       override def run() {
         var shutdownHook: AnyRef = null
@@ -89,9 +90,13 @@ private[deploy] class DriverRunner(
           }
 
           // prepare driver jars and run driver
+          // 启动Driver的准备工作，
+          // 包括将用户上传的jar下载到Driver的工作目录、将Driver的启动命令
+          // 封装成ProcessBiulder、标准输出重定向到文件、超时重试、启动Driver等
           val exitCode = prepareAndRunDriver()
 
           // set final state depending on if forcibly killed and process exit code
+          //Driver退出时的一些处理
           finalState = if (exitCode == 0) {
             Some(DriverState.FINISHED)
           } else if (killed) {
@@ -169,7 +174,9 @@ private[deploy] class DriverRunner(
   }
 
   private[worker] def prepareAndRunDriver(): Int = {
+    //创建Driver的工作目录
     val driverDir = createWorkingDirectory()
+    //将用户上传的jar包（编写的程序）下载到Driver的工作目录中去
     val localJarFilename = downloadUserJar(driverDir)
 
     def substituteVariables(argument: String): String = argument match {
@@ -179,9 +186,12 @@ private[deploy] class DriverRunner(
     }
 
     // TODO: If we add ability to submit multiple jars they should also be added here
+    //将Driver的启动命令封装成ProcessBiulder
     val builder = CommandUtils.buildProcessBuilder(driverDesc.command, securityManager,
       driverDesc.mem, sparkHome.getAbsolutePath, substituteVariables)
 
+    //启动Driver，其中前置工作有
+    //标准输出的重定向、超时重试、启动Driver等
     runDriver(builder, driverDir, driverDesc.supervise)
   }
 
@@ -189,6 +199,7 @@ private[deploy] class DriverRunner(
     builder.directory(baseDir)
     def initialize(process: Process): Unit = {
       // Redirect stdout and stderr to files
+      //重定向stdout和stderr标准输出到文件
       val stdout = new File(baseDir, "stdout")
       CommandUtils.redirectStream(process.getInputStream, stdout)
 
@@ -198,6 +209,7 @@ private[deploy] class DriverRunner(
       Files.append(header, stderr, StandardCharsets.UTF_8)
       CommandUtils.redirectStream(process.getErrorStream, stderr)
     }
+    //超时重试和启动Driver
     runCommandWithRetry(ProcessBuilderLike(builder), initialize, supervise)
   }
 
@@ -220,6 +232,7 @@ private[deploy] class DriverRunner(
       }
 
       val processStart = clock.getTimeMillis()
+      //真正的启动
       exitCode = process.get.waitFor()
 
       // check if attempting another run
