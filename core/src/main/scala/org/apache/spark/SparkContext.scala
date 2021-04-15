@@ -2055,6 +2055,7 @@ class SparkContext(config: SparkConf) extends Logging {
       rdd: RDD[T],
       func: (TaskContext, Iterator[T]) => U,
       partitions: Seq[Int],
+      //用来处理（收集）每个partition计算结果
       resultHandler: (Int, U) => Unit): Unit = {
     if (stopped.get()) {
       throw new IllegalStateException("SparkContext has been shutdown")
@@ -2083,11 +2084,21 @@ class SparkContext(config: SparkConf) extends Logging {
    * @return in-memory collection with a result of the job (each collection element will contain
    * a result from one partition)
    */
+  /*
+  *
+  * @param rdd 要运行任务的目标RDD
+  * @param func 用于处理RDD每个partition的函数
+  * @param partitions 设置分区数。可能存在一些作业不想计算所有partition的数据，而只是计算一部分数据，比如 first()
+  *
+  * 该函数主要是为了收集目标RDD中每个partition计算结果，并将每个partition的计算结果缓存在Array中
+  */
   def runJob[T, U: ClassTag](
       rdd: RDD[T],
       func: (TaskContext, Iterator[T]) => U,
       partitions: Seq[Int]): Array[U] = {
     val results = new Array[U](partitions.size)
+    //匿名函数 (index, res) => results(index) = res 的的最终执行是在DAGScheduler的runJob进行的
+    //也就是DAGScheduler会将RDD的每个partition的计算机额过进行收集
     runJob[T, U](rdd, func, partitions, (index, res) => results(index) = res)
     results
   }
@@ -2101,6 +2112,12 @@ class SparkContext(config: SparkConf) extends Logging {
    * partitions of the target RDD, e.g. for operations like `first()`
    * @return in-memory collection with a result of the job (each collection element will contain
    * a result from one partition)
+   */
+  /*
+   *
+   * @param rdd 要运行任务的目标RDD
+   * @param func 用于处理RDD每个partition的函数
+   * @param partitions 设置分区数。可能存在一些作业不想计算所有partition的数据，而只是计算一部分数据，比如 first()
    */
   def runJob[T, U: ClassTag](
       rdd: RDD[T],
@@ -2130,6 +2147,11 @@ class SparkContext(config: SparkConf) extends Logging {
    * @param func a function to run on each partition of the RDD
    * @return in-memory collection with a result of the job (each collection element will contain
    * a result from one partition)
+   */
+  /*
+   *
+   * @param rdd 要运行任务的目标RDD
+   * @param func 处理每个partition的函数
    */
   def runJob[T, U: ClassTag](rdd: RDD[T], func: Iterator[T] => U): Array[U] = {
     runJob(rdd, func, 0 until rdd.partitions.length)
