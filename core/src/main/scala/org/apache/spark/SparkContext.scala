@@ -2065,6 +2065,8 @@ class SparkContext(config: SparkConf) extends Logging {
     if (conf.getBoolean("spark.logLineage", false)) {
       logInfo("RDD's recursive dependencies:\n" + rdd.toDebugString)
     }
+    //在出发Action算子的时候就会调用SparkContext的一些列runJob，最后一个runJob会调用DAGScheduler的runJob
+    //DAGScheduler的runJob就会将Job进行提交
     dagScheduler.runJob(rdd, cleanedFunc, partitions, callSite, resultHandler, localProperties.get)
     progressBar.foreach(_.finishAll())
     rdd.doCheckpoint()
