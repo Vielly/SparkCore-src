@@ -31,6 +31,11 @@ import org.apache.spark.util.{AccumulatorV2, CallSite}
  * submitted) but there is a single "logic" thread that reads these events and takes decisions.
  * This greatly simplifies synchronization.
  */
+
+/*
+ * 是一个可以被DAGScheduler处理的事件类型。DAGScheduler可以在任何线程post事件的地方使用队列结构（列如一个task完
+ * 成或者一个新的Job被创建），但是只有一个 “逻辑” 线程可以读取这些事件并做出决定。极大地简化了同步。
+ */
 private[scheduler] sealed trait DAGSchedulerEvent
 
 /** A result-yielding job was submitted on a target RDD */
