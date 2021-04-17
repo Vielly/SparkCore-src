@@ -292,6 +292,7 @@ abstract class RDD[T: ClassTag](
    * Get the preferred locations of a partition, taking into account whether the
    * RDD is checkpointed.
    */
+    // 通过获取partition的最佳位置，进而得出RDD是否被checkpoint
   final def preferredLocations(split: Partition): Seq[String] = {
     checkpointRDD.map(_.getPreferredLocations(split)).getOrElse {
       getPreferredLocations(split)

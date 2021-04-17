@@ -317,16 +317,23 @@ private[spark] class DAGScheduler(
     eventProcessLoop.post(SpeculativeTaskSubmitted(task))
   }
 
+  /* IndexedSeq[Seq[TaskLocation]] 代表的是rdd的partition集合，每个partition对应的task位置集合（相当于二维数组）
+   * cacheLocs（HashMap[Int,IndexedSeq[Seq[TaskLocation]]]）代表的是rdd的id与IndexedSeq[Seq[TaskLocation]]的映射关系
+   */
   private[scheduler]
   def getCacheLocs(rdd: RDD[_]): IndexedSeq[Seq[TaskLocation]] = cacheLocs.synchronized {
     // Note: this doesn't use `getOrElse()` because this method is called O(num tasks) times
     if (!cacheLocs.contains(rdd.id)) {
       // Note: if the storage level is NONE, we don't need to get locations from block manager.
+      // 如果持久化等级是NONE，那么就不需要获取物理快位置，直接使用 Nil 填充 IndexedSeq
       val locs: IndexedSeq[Seq[TaskLocation]] = if (rdd.getStorageLevel == StorageLevel.NONE) {
         IndexedSeq.fill(rdd.partitions.length)(Nil)
       } else {
-        val blockIds =
+        val blockIds = {
+          //获取partition的物理块位置
           rdd.partitions.indices.map(index => RDDBlockId(rdd.id, index)).toArray[BlockId]
+        }
+        //使用partition的物理块位置所在的机器地址，即任务的最佳位置
         blockManagerMaster.getLocations(blockIds).map { bms =>
           bms.map(bm => TaskLocation(bm.host, bm.executorId))
         }
@@ -397,7 +404,8 @@ private[spark] class DAGScheduler(
     checkBarrierStageWithNumSlots(rdd)
     checkBarrierStageWithRDDChainPattern(rdd, rdd.getNumPartitions)
     val numTasks = rdd.partitions.length
-    //通过RDD的宽依赖获取所有父Stage的集合，创建的都是ShuffleMapStage
+    // 通过RDD，获取其所有的宽依赖集合，因为Stage是通过宽依赖进行Stage的划分的，
+    // 所以通过宽依赖获取此宽依赖对应的Stage，进而获取到所有父Stage集合
     val parents = getOrCreateParentStages(rdd, jobId)
     //新创建的Stage的ID，即 +1
     val id = nextStageId.getAndIncrement()
@@ -477,6 +485,7 @@ private[spark] class DAGScheduler(
    * the provided firstJobId.
    */
   private def getOrCreateParentStages(rdd: RDD[_], firstJobId: Int): List[Stage] = {
+    // 获取所有rdd的宽依赖
     getShuffleDependencies(rdd).map { shuffleDep =>
       //通过RDD的宽依赖获取或创建Stage
       getOrCreateShuffleMapStage(shuffleDep, firstJobId)
@@ -1148,6 +1157,7 @@ private[spark] class DAGScheduler(
     logDebug("submitMissingTasks(" + stage + ")")
 
     // First figure out the indexes of partition ids to compute.
+    // 通过第一个Stage获取所有parttion的id
     val partitionsToCompute: Seq[Int] = stage.findMissingPartitions()
 
     // Use the scheduling pool, job group, description, etc. from an ActiveJob associated
@@ -1169,6 +1179,9 @@ private[spark] class DAGScheduler(
     val taskIdToLocations: Map[Int, Seq[TaskLocation]] = try {
       stage match {
         case s: ShuffleMapStage =>
+          // 通过partition的id，找出最佳位置，也就是找出Stage中哪个RDD对应的partition被缓存或者checkpoint
+          // 返回partition的id与任务位置集合的映射
+          // 其实DAGScheduler只是对任务最佳位置进行计算，最终的任务分发到最佳位置上还是TaskScheduler进行的
           partitionsToCompute.map { id => (id, getPreferredLocs(stage.rdd, id))}.toMap
         case s: ResultStage =>
           partitionsToCompute.map { id =>
@@ -2062,11 +2075,18 @@ private[spark] class DAGScheduler(
       return Nil
     }
     // If the partition is cached, return the cache locations
+    /*
+     * 查看rdd的partition是否被缓存，即通过partition获取任务位置，并返回
+     * 描述：首先是通过rdd获取到每个partition与task位置集合的映射关系，
+     *      如果获取到（task的位置集合），说明当前partition已经被缓存
+     *      如果获取不到（Nil），说明当前partition没有被缓存
+     */
     val cached = getCacheLocs(rdd)(partition)
     if (cached.nonEmpty) {
       return cached
     }
     // If the RDD has some placement preferences (as is the case for input RDDs), get those
+    // 检查RDD的partition是否被checkpoint，如果已经checkpoint，则为每个partition设置任务位置，并返回
     val rddPrefs = rdd.preferredLocations(rdd.partitions(partition)).toList
     if (rddPrefs.nonEmpty) {
       return rddPrefs.map(TaskLocation(_))
@@ -2075,6 +2095,7 @@ private[spark] class DAGScheduler(
     // If the RDD has narrow dependencies, pick the first partition of the first narrow dependency
     // that has any placement preferences. Ideally we would choose based on transfer sizes,
     // but this will do for now.
+    // 递归，查找RDD的父RDD的partition是否被缓存或者checkpoint
     rdd.dependencies.foreach {
       case n: NarrowDependency[_] =>
         for (inPart <- n.getParents(partition)) {
@@ -2086,7 +2107,7 @@ private[spark] class DAGScheduler(
 
       case _ =>
     }
-
+    // 如果当前Stage，从最后一个RDD追溯到最开始的RDD，对应的partition都没有被缓存或者checkpoint，则返回Nil
     Nil
   }
 
